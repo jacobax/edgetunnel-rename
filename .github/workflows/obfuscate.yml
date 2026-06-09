@@ -1,0 +1,41 @@
+name: 自动汉字化混淆 CF Worker
+
+on:
+#  schedule:
+#    - cron: '0 0 * * *' # 每天国际标准时间 0:00 (北京时间上午 8:00) 自动执行
+  workflow_dispatch: # 支持在 GitHub 页面上手动点击触发
+
+jobs:
+  build-and-obfuscate:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write # 赋予 Actions 写入和推送代码的权限
+
+    steps:
+      - name: 检出仓库代码
+        uses: actions/checkout@v4
+
+      - name: 设置 Node.js 环境
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: 安装混淆依赖
+        run: npm install javascript-obfuscator
+
+      - name: 执行混淆与汉字化脚本
+        run: node obfuscate.js
+
+      - name: 提交并推送新代码
+        run: |
+          git config --global user.name "github-actions[bot]"
+          git config --global user.email "github-actions[bot]@users.noreply.github.com"
+          git add _worker.js
+          
+          # 检查是否有代码变动，有变动才提交
+          if git diff-index --quiet HEAD --; then
+            echo "代码无变化，无需更新。"
+          else
+            git commit -m "自动更新: 同步最新 edgetunnel 并完成汉字化混淆"
+            git push
+          fi
