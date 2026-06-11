@@ -1,41 +1,66 @@
-name: 自动汉字化混淆 CF Worker
+name: EDT 命名单汉字化
 
 on:
 #  schedule:
-#    - cron: '0 0 * * *' # 每天国际标准时间 0:00 (北京时间上午 8:00) 自动执行
-  workflow_dispatch: # 支持在 GitHub 页面上手动点击触发
+#    - cron: '0 */2 * * *' # 每 2 小时自动检查一次（可根据需要改为 '*/30 * * * *' 每30分钟）
+  workflow_dispatch: # 保留手动触发按钮
 
 jobs:
-  build-and-obfuscate:
+  check-and-build:
     runs-on: ubuntu-latest
     permissions:
-      contents: write # 赋予 Actions 写入和推送代码的权限
+      contents: write
 
     steps:
       - name: 检出仓库代码
         uses: actions/checkout@v4
 
+      - name: 检查上游代码是否有更新
+        id: check_upstream
+        run: |
+          # 1. 获取 cmliu/edgetunnel 仓库中 _worker.js 的最新提交 SHA
+          UPSTREAM_SHA=$(curl -s "https://api.github.com/repos/cmliu/edgetunnel/commits?path=_worker.js&per_page=1" | jq -r '.[0].sha')
+          echo "当前上游最新 SHA: $UPSTREAM_SHA"
+          
+          # 2. 读取本地记录的 SHA
+          if [ -f upstream_sha.txt ]; then
+            LOCAL_SHA=$(cat upstream_sha.txt)
+          else
+            LOCAL_SHA=""
+          fi
+          echo "本地记录的 SHA: $LOCAL_SHA"
+          
+          # 3. 对比并决定是否继续
+          if [ "$UPSTREAM_SHA" = "$LOCAL_SHA" ] && [ "$UPSTREAM_SHA" != "null" ]; then
+            echo "上游代码没有更新，跳过后续步骤。"
+            echo "SHOULD_UPDATE=false" >> $GITHUB_ENV
+          else
+            echo "上游代码已更新或首次运行，准备同步！"
+            echo "SHOULD_UPDATE=true" >> $GITHUB_ENV
+            echo "$UPSTREAM_SHA" > upstream_sha.txt
+          fi
+
       - name: 设置 Node.js 环境
+        if: env.SHOULD_UPDATE == 'true'
         uses: actions/setup-node@v4
         with:
           node-version: 20
 
       - name: 安装混淆依赖
+        if: env.SHOULD_UPDATE == 'true'
         run: npm install javascript-obfuscator
 
       - name: 执行混淆与汉字化脚本
+        if: env.SHOULD_UPDATE == 'true'
         run: node obfuscate.js
 
-      - name: 提交并推送新代码
+      - name: 提交并推送新代码和版本标识
+        if: env.SHOULD_UPDATE == 'true'
         run: |
           git config --global user.name "github-actions[bot]"
           git config --global user.email "github-actions[bot]@users.noreply.github.com"
-          git add _worker.js
           
-          # 检查是否有代码变动，有变动才提交
-          if git diff-index --quiet HEAD --; then
-            echo "代码无变化，无需更新。"
-          else
-            git commit -m "自动更新: 同步最新 edgetunnel 并完成汉字化混淆"
-            git push
-          fi
+          # 将代码和新的 SHA 标识一起提交
+          git add _worker.js upstream_sha.txt
+          git commit -m "自动同步更新: 上游源码已变动，重新完成汉字化混淆"
+          git push
