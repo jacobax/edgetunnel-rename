@@ -1,8 +1,8 @@
 name: EDT 命名单汉字化
 
 on:
-  schedule:
-    - cron: '32 1,9 * * *'
+#  schedule:
+#    - cron: '32 1,9 * * *'
   workflow_dispatch:
 
 jobs:
