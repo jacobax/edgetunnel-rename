@@ -1,9 +1,9 @@
 name: EDT 命名单汉字化
 
 on:
-#  schedule:
-#    - cron: '0 */2 * * *' # 每 2 小时自动检查一次（可根据需要改为 '*/30 * * * *' 每30分钟）
-  workflow_dispatch: # 保留手动触发按钮
+  schedule:
+    - cron: '32 1,9 * * *'
+  workflow_dispatch:
 
 jobs:
   check-and-build:
