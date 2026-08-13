@@ -1,0 +1,251 @@
+name: Update _worker.js
+
+on:
+#  schedule:
+    # 每天北京时间 04:20 左右执行
+    # GitHub Actions 的 cron 使用 UTC
+    #- cron: "20 20 * * *"
+
+  workflow_dispatch:
+    inputs:
+      force:
+        description: "即使上游提交未变化，也强制重新生成"
+        required: false
+        type: boolean
+        default: false
+
+permissions:
+  contents: write
+
+concurrency:
+  group: update-worker-js
+  cancel-in-progress: true
+
+env:
+  UPSTREAM_REPOSITORY: cmliu/edgetunnel
+  UPSTREAM_BRANCH: main
+  UPSTREAM_FILE: _worker.js
+  COMMIT_RECORD_FILE: .upstream-worker-commit
+
+jobs:
+  update:
+    name: Check and update _worker.js
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+
+      - name: Check upstream file commit
+        id: upstream
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          FORCE_UPDATE: ${{ inputs.force || 'false' }}
+        run: |
+          set -euo pipefail
+
+          API_URL="https://api.github.com/repos/${UPSTREAM_REPOSITORY}/commits"
+          API_URL="${API_URL}?sha=${UPSTREAM_BRANCH}&path=${UPSTREAM_FILE}&per_page=1"
+
+          echo "Checking upstream file:"
+          echo "https://github.com/${UPSTREAM_REPOSITORY}/blob/${UPSTREAM_BRANCH}/${UPSTREAM_FILE}"
+
+          RESPONSE_FILE="$(mktemp)"
+
+          HTTP_CODE="$(
+            curl \
+              --silent \
+              --show-error \
+              --location \
+              --retry 5 \
+              --retry-delay 5 \
+              --connect-timeout 20 \
+              --max-time 120 \
+              --output "${RESPONSE_FILE}" \
+              --write-out "%{http_code}" \
+              --header "Accept: application/vnd.github+json" \
+              --header "Authorization: Bearer ${GH_TOKEN}" \
+              --header "X-GitHub-Api-Version: 2022-11-28" \
+              "${API_URL}"
+          )"
+
+          if [ "${HTTP_CODE}" != "200" ]; then
+            echo "GitHub API request failed with HTTP ${HTTP_CODE}."
+            cat "${RESPONSE_FILE}"
+            exit 1
+          fi
+
+          UPSTREAM_COMMIT="$(jq -r '.[0].sha // empty' "${RESPONSE_FILE}")"
+
+          if [ -z "${UPSTREAM_COMMIT}" ]; then
+            echo "Unable to obtain the latest commit for ${UPSTREAM_FILE}."
+            cat "${RESPONSE_FILE}"
+            exit 1
+          fi
+
+          if [ -f "${COMMIT_RECORD_FILE}" ]; then
+            LOCAL_COMMIT="$(tr -d '[:space:]' < "${COMMIT_RECORD_FILE}")"
+          else
+            LOCAL_COMMIT=""
+          fi
+
+          echo "Recorded commit : ${LOCAL_COMMIT:-none}"
+          echo "Upstream commit : ${UPSTREAM_COMMIT}"
+          echo "Force update    : ${FORCE_UPDATE}"
+
+          SHOULD_UPDATE="false"
+
+          if [ "${FORCE_UPDATE}" = "true" ]; then
+            echo "Forced update requested."
+            SHOULD_UPDATE="true"
+          elif [ ! -s "_worker.js" ]; then
+            echo "_worker.js does not exist or is empty."
+            SHOULD_UPDATE="true"
+          elif [ -z "${LOCAL_COMMIT}" ]; then
+            echo "No upstream commit record exists."
+            SHOULD_UPDATE="true"
+          elif [ "${LOCAL_COMMIT}" != "${UPSTREAM_COMMIT}" ]; then
+            echo "Upstream source file has changed."
+            SHOULD_UPDATE="true"
+          else
+            echo "Upstream source file has not changed."
+          fi
+
+          {
+            echo "commit=${UPSTREAM_COMMIT}"
+            echo "should_update=${SHOULD_UPDATE}"
+          } >> "${GITHUB_OUTPUT}"
+
+      - name: Setup Node.js
+        if: steps.upstream.outputs.should_update == 'true'
+        uses: actions/setup-node@v6
+        with:
+          node-version: "22"
+          package-manager-cache: false
+
+      - name: Download upstream source
+        if: steps.upstream.outputs.should_update == 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          RAW_URL="https://raw.githubusercontent.com"
+          RAW_URL="${RAW_URL}/${UPSTREAM_REPOSITORY}/${UPSTREAM_BRANCH}/${UPSTREAM_FILE}"
+
+          curl \
+            --fail \
+            --location \
+            --silent \
+            --show-error \
+            --retry 5 \
+            --retry-delay 5 \
+            --connect-timeout 20 \
+            --max-time 120 \
+            "${RAW_URL}" \
+            --output "/tmp/_worker.source.js"
+
+          if [ ! -s "/tmp/_worker.source.js" ]; then
+            echo "Downloaded source file is empty."
+            exit 1
+          fi
+
+          echo "Downloaded source size:"
+          wc -c "/tmp/_worker.source.js"
+
+      - name: Clean, compress and beautify with Terser
+        if: steps.upstream.outputs.should_update == 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          # 第一遍：压缩、优化、变量混淆并删除注释
+          npx --yes terser@5 \
+            "/tmp/_worker.source.js" \
+            --compress \
+            --mangle \
+            --format comments=false \
+            --output "/tmp/_worker.min.js"
+
+          if [ ! -s "/tmp/_worker.min.js" ]; then
+            echo "Terser compressed output is empty."
+            exit 1
+          fi
+
+          # 第二遍：重新格式化展开
+          npx --yes terser@5 \
+            "/tmp/_worker.min.js" \
+            --format beautify,comments=false,semicolons=true \
+            --output "/tmp/_worker.beautified.js"
+
+          if [ ! -s "/tmp/_worker.beautified.js" ]; then
+            echo "Terser beautified output is empty."
+            exit 1
+          fi
+
+          {
+            echo "/*"
+            echo " * Automatically generated from:"
+            echo " * https://github.com/${UPSTREAM_REPOSITORY}/blob/${UPSTREAM_BRANCH}/${UPSTREAM_FILE}"
+            echo " *"
+            echo " * Upstream commit: ${{ steps.upstream.outputs.commit }}"
+            echo " * Processed with Terser. Do not edit manually."
+            echo " */"
+            echo
+            cat "/tmp/_worker.beautified.js"
+            echo
+          } > "_worker.js"
+
+      - name: Validate generated JavaScript
+        if: steps.upstream.outputs.should_update == 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          test -s "_worker.js"
+
+          # 重新解析生成文件，验证 JavaScript 语法
+          npx --yes terser@5 \
+            "_worker.js" \
+            --parse-only \
+            --output "/tmp/_worker.validation.js"
+
+          test -s "/tmp/_worker.validation.js"
+
+          echo "Generated file size:"
+          wc -c "_worker.js"
+
+      - name: Save upstream commit
+        if: steps.upstream.outputs.should_update == 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          printf '%s\n' \
+            "${{ steps.upstream.outputs.commit }}" \
+            > "${COMMIT_RECORD_FILE}"
+
+      - name: Commit updated files
+        if: steps.upstream.outputs.should_update == 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          if git diff --quiet -- "_worker.js" "${COMMIT_RECORD_FILE}"; then
+            echo "No file changes detected. Nothing to commit."
+            exit 0
+          fi
+
+          git config user.name "github-actions[bot]"
+          git config user.email \
+            "41898282+github-actions[bot]@users.noreply.github.com"
+
+          git add "_worker.js" "${COMMIT_RECORD_FILE}"
+
+          git commit \
+            -m "chore: update _worker.js" \
+            -m "Upstream commit: ${{ steps.upstream.outputs.commit }}"
+
+          git push
