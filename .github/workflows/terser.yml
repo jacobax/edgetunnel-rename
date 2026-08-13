@@ -1,4 +1,4 @@
-name: Update _worker.js
+name: terser 压缩、清洗、展开
 
 on:
 #  schedule:
