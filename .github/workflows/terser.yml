@@ -1,4 +1,4 @@
-name: terser 压缩、清洗、展开
+name: terser 清洗压缩再展开
 
 on:
 #  schedule:
@@ -187,9 +187,6 @@ jobs:
 
           {
             echo "/*"
-            echo " * Automatically generated from:"
-            echo " * https://github.com/${UPSTREAM_REPOSITORY}/blob/${UPSTREAM_BRANCH}/${UPSTREAM_FILE}"
-            echo " *"
             echo " * Upstream commit: ${{ steps.upstream.outputs.commit }}"
             echo " * Processed with Terser. Do not edit manually."
             echo " */"
