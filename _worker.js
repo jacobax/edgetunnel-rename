@@ -1,7 +1,4 @@
 /*
- * Automatically generated from:
- * https://github.com/cmliu/edgetunnel/blob/main/_worker.js
- *
  * Upstream commit: ea1460da8206b9dad88e73a146246315806875db
  * Processed with Terser. Do not edit manually.
  */
